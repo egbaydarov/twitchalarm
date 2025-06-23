@@ -1,69 +1,111 @@
 package main
 
 import (
-    "fmt"
-    "log"
-    "math/rand"
-    "os/exec"
-    "strings"
-    "time"
-
-    "github.com/gorilla/websocket"
+	"fmt"
+	"log"
+	"math/rand"
+	"os/exec"
+	"strings"
+	"github.com/godbus/dbus/v5"
+	"github.com/gorilla/websocket"
 )
 
 const (
-    wsEndpoint = "wss://irc-ws.chat.twitch.tv:443"
-    channel    = "#yegorbaydarov"
+	wsEndpoint = "wss://irc-ws.chat.twitch.tv:443"
+	channel    = "#yegorbaydarov"
 )
 
 func main() {
-    rand.Seed(time.Now().UnixNano())
-    nick := fmt.Sprintf("justinfan%d", rand.Intn(99999))
+	nick := fmt.Sprintf("justinfan%d", rand.Intn(99999))
 
-    dialer, _, err := websocket.DefaultDialer.Dial(wsEndpoint, nil)
-    if err != nil {
-        log.Fatalf("dial: %v", err)
-    }
-    defer dialer.Close()
+	conn, _, err := websocket.DefaultDialer.Dial(wsEndpoint, nil)
+	if err != nil {
+		log.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
 
-    ircWrite := func(msg string) {
-        if err := dialer.WriteMessage(websocket.TextMessage, []byte(msg+"\r\n")); err != nil {
-            log.Fatalf("write: %v", err)
-        }
-    }
+	// D-Bus connection (maco must be running)
+	dbusConn, err := dbus.SessionBus()
+	if err != nil {
+		log.Fatalf("dbus: %v", err)
+	}
+	defer dbusConn.Close()
 
-    // Minimal IRC handshake (anonymous)
-    ircWrite("PASS SCHMOOPIIE")            // arbitrary pass is fine
-    ircWrite("NICK " + nick)               // anonymous nick
-    ircWrite("CAP REQ :twitch.tv/tags")    // want tags so we can ignore them
-    ircWrite("JOIN " + channel)
+	ircWrite := func(msg string) {
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(msg+"\r\n")); err != nil {
+			log.Fatalf("write: %v", err)
+		}
+	}
 
-    for {
-        _, raw, err := dialer.ReadMessage()
-        if err != nil {
-            log.Fatalf("read: %v", err)
-        }
-        line := string(raw)
+	// Anonymous IRC handshake
+	ircWrite("PASS SCHMOOPIIE")
+	ircWrite("NICK " + nick)
+	ircWrite("CAP REQ :twitch.tv/tags")
+	ircWrite("JOIN " + channel)
 
-        if strings.HasPrefix(line, "PING") {
-            ircWrite("PONG :tmi.twitch.tv")
-            continue
-        }
+	for {
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			log.Fatalf("read: %v", err)
+		}
+		line := string(raw)
 
-        if i := strings.Index(line, " PRIVMSG "); i != -1 {
-            msgParts := strings.SplitN(line, " :", 3)
-            if len(msgParts) >= 3 {
-                message := strings.TrimSpace(msgParts[2])
-                spawnNotify(message)
-            }
-        }
-    }
+		if strings.HasPrefix(line, "PING") {
+			ircWrite("PONG :tmi.twitch.tv")
+			continue
+		}
+
+		if strings.Contains(line, " PRIVMSG ") {
+			// Properly parse tag + prefix + message
+			rawNoTags := line
+			if strings.HasPrefix(rawNoTags, "@") {
+				if tagEnd := strings.Index(rawNoTags, " "); tagEnd != -1 && tagEnd+1 < len(rawNoTags) {
+					rawNoTags = rawNoTags[tagEnd+1:]
+				}
+			}
+
+			if strings.HasPrefix(rawNoTags, ":") {
+				prefixEnd := strings.Index(rawNoTags, "!")
+				if prefixEnd != -1 {
+					username := rawNoTags[1:prefixEnd]
+
+					msgParts := strings.SplitN(rawNoTags, " :", 2)
+					if len(msgParts) == 2 {
+						message := strings.TrimSpace(msgParts[1])
+						sendNotify(dbusConn, username, message)
+					}
+				}
+			}
+		}
+	}
 }
 
-func spawnNotify(text string) {
-    if len(text) > 180 {
-        text = text[:177] + "..."
-    }
-    cmd := exec.Command("hyprctl", "notify", "-1", "10000", "rgb(ff0000)", fmt.Sprintf("fontsize:35 %s", text))
-    _ = cmd.Run()
+func sendNotify(conn *dbus.Conn, username, text string) {
+	if len(text) > 180 {
+		text = text[:177] + "..."
+	}
+
+	obj := conn.Object("org.freedesktop.Notifications", "/org/freedesktop/Notifications")
+
+	hints := map[string]dbus.Variant{
+	}
+
+	var id uint32
+	call := obj.Call(
+		"org.freedesktop.Notifications.Notify", 0,
+		"twitch-chat",
+		uint32(0),
+		"",
+		username,
+		text,
+		[]string{},
+		hints,
+		int32(7000),
+	)
+	if call.Err != nil {
+		log.Printf("notify error: %v", call.Err)
+	}
+
+	_ = call.Store(&id)
+	_ = exec.Command("paplay", "/home/byda/sandbox/twitch-notifs/applepay.wav").Run()
 }
