@@ -100,8 +100,6 @@ func sendNotify(
 
 	hints := map[string]dbus.Variant{}
 
-	_ = exec.Command("paplay", "/home/byda/sandbox/twitch-notifs/applepay.wav").Run()
-
 	var id uint32
 	call := obj.Call(
 		"org.freedesktop.Notifications.Notify", 0,
