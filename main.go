@@ -122,7 +122,6 @@ func sendNotify(
 
 	var body io.Reader = strings.NewReader(fmt.Sprintf("{\"text\": \"%s\",\"model_id\": \"eleven_multilingual_v2\"}", text))
 	req, _ := http.NewRequest("POST", textToSpeechApi, body)
-
 	apiKey := os.Getenv("ELEVENLABS_API_KEY")
 	req.Header.Add("xi-api-key", apiKey)
 	req.Header.Add("Content-Type", "application/json")
@@ -133,8 +132,12 @@ func sendNotify(
 		return
 	}
 
-	var audio []byte
-	resp.Body.Read(audio)
+	audio, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("read body error: %v", call.Err)
+		return
+	}
+
 	fileName := fmt.Sprintf("/tmp/%s-%d.mp3", username, time.Now().Unix())
 	err = os.WriteFile(fileName, audio, 0644)
 
