@@ -2,10 +2,15 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
+	"net/http"
+	"os"
 	"os/exec"
 	"strings"
+	"time"
+
 	"github.com/godbus/dbus/v5"
 	"github.com/gorilla/websocket"
 )
@@ -13,10 +18,13 @@ import (
 const (
 	wsEndpoint = "wss://irc-ws.chat.twitch.tv:443"
 	channel    = "#yegorbaydarov"
+
+	textToSpeechApi = "https://api.elevenlabs.io/v1/text-to-speech/jVJFtjYKoJ2iiMkNqq8P?output_format=mp3_44100_128"
 )
 
 func main() {
 	nick := fmt.Sprintf("justinfan%d", rand.Intn(99999))
+	client := &http.Client{}
 
 	conn, _, err := websocket.DefaultDialer.Dial(wsEndpoint, nil)
 	if err != nil {
@@ -72,7 +80,7 @@ func main() {
 					msgParts := strings.SplitN(rawNoTags, " :", 2)
 					if len(msgParts) == 2 {
 						message := strings.TrimSpace(msgParts[1])
-						sendNotify(dbusConn, username, message)
+						sendNotify(client, dbusConn, username, message)
 					}
 				}
 			}
@@ -80,15 +88,19 @@ func main() {
 	}
 }
 
-func sendNotify(conn *dbus.Conn, username, text string) {
+func sendNotify(
+	client *http.Client,
+	conn *dbus.Conn,
+	username, text string) {
 	if len(text) > 180 {
 		text = text[:177] + "..."
 	}
 
 	obj := conn.Object("org.freedesktop.Notifications", "/org/freedesktop/Notifications")
 
-	hints := map[string]dbus.Variant{
-	}
+	hints := map[string]dbus.Variant{}
+
+	_ = exec.Command("paplay", "/home/byda/sandbox/twitch-notifs/applepay.wav").Run()
 
 	var id uint32
 	call := obj.Call(
@@ -107,5 +119,29 @@ func sendNotify(conn *dbus.Conn, username, text string) {
 	}
 
 	_ = call.Store(&id)
-	_ = exec.Command("paplay", "/home/byda/sandbox/twitch-notifs/applepay.wav").Run()
+
+	var body io.Reader = strings.NewReader(fmt.Sprintf("{\"text\": \"%s\",\"model_id\": \"eleven_multilingual_v2\"}", text))
+	req, _ := http.NewRequest("POST", textToSpeechApi, body)
+
+	apiKey := os.Getenv("ELEVENLABS_API_KEY")
+	req.Header.Add("xi-api-key", apiKey)
+	req.Header.Add("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("eleven labs api error: %v", call.Err)
+		return
+	}
+
+	var audio []byte
+	resp.Body.Read(audio)
+	fileName := fmt.Sprintf("/tmp/%s-%d.mp3", username, time.Now().Unix())
+	err = os.WriteFile(fileName, audio, 0644)
+
+	if err != nil {
+		log.Printf("save file error: %v", call.Err)
+		return
+	}
+
+	_ = exec.Command("paplay", fileName).Run()
 }
