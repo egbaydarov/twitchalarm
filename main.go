@@ -39,6 +39,9 @@ func main() {
 	}
 	defer dbusConn.Close()
 
+	readMessage(client, "iam", "запустился я")
+	showNotificaton(dbusConn, "iam", "запустился я")
+
 	ircWrite := func(msg string) {
 		if err := conn.WriteMessage(websocket.TextMessage, []byte(msg+"\r\n")); err != nil {
 			log.Fatalf("write: %v", err)
@@ -111,12 +114,44 @@ func sendNotify(
 		text = text[:177] + "..."
 	}
 
-	// Only process text-to-speech for subscribers
+	//Only process text-to-speech for subscribers
 	//if !isSubscriber {
 	//  _ = exec.Command("paplay", "/home/byda/sandbox/twitch-notifs/applepay.wav").Run()
 	//	return
-	//}
+	//} else {}
 
+	readMessage(client, username, text)
+	showNotificaton(conn, username, text)
+}
+
+func showNotificaton(
+	conn *dbus.Conn,
+	username, text string,
+) {
+	obj := conn.Object("org.freedesktop.Notifications", "/org/freedesktop/Notifications")
+	hints := map[string]dbus.Variant{}
+	var id uint32
+	call := obj.Call(
+		"org.freedesktop.Notifications.Notify", 0,
+		"twitch-chat",
+		uint32(0),
+		"",
+		username,
+		text,
+		[]string{},
+		hints,
+		int32(7000),
+	)
+	if call.Err != nil {
+		log.Printf("notify error: %v", call.Err)
+	}
+	_ = call.Store(&id)
+}
+
+func readMessage(
+	client *http.Client,
+	username, text string,
+) {
 	var body io.Reader = strings.NewReader(fmt.Sprintf("{\"text\": \"%s\",\"model_id\": \"eleven_multilingual_v2\"}", text))
 	req, _ := http.NewRequest("POST", textToSpeechApi, body)
 
@@ -143,25 +178,5 @@ func sendNotify(
 		log.Printf("save file error: %v", err)
 		return
 	}
-
 	_ = exec.Command("paplay", fileName).Run()
-
-	obj := conn.Object("org.freedesktop.Notifications", "/org/freedesktop/Notifications")
-	hints := map[string]dbus.Variant{}
-	var id uint32
-	call := obj.Call(
-		"org.freedesktop.Notifications.Notify", 0,
-		"twitch-chat",
-		uint32(0),
-		"",
-		username,
-		text,
-		[]string{},
-		hints,
-		int32(7000),
-	)
-	if call.Err != nil {
-		log.Printf("notify error: %v", call.Err)
-	}
-	_ = call.Store(&id)
 }
