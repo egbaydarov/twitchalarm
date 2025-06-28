@@ -64,11 +64,19 @@ func main() {
 		}
 
 		if strings.Contains(line, " PRIVMSG ") {
-			// Properly parse tag + prefix + message
+			// Parse tags
+			tags := make(map[string]string)
 			rawNoTags := line
-			if strings.HasPrefix(rawNoTags, "@") {
-				if tagEnd := strings.Index(rawNoTags, " "); tagEnd != -1 && tagEnd+1 < len(rawNoTags) {
-					rawNoTags = rawNoTags[tagEnd+1:]
+			if strings.HasPrefix(line, "@") {
+				if tagEnd := strings.Index(line, " "); tagEnd != -1 && tagEnd+1 < len(line) {
+					tagStr := line[1:tagEnd]
+					rawNoTags = line[tagEnd+1:]
+					for _, tag := range strings.Split(tagStr, ";") {
+						parts := strings.SplitN(tag, "=", 2)
+						if len(parts) == 2 {
+							tags[parts[0]] = parts[1]
+						}
+					}
 				}
 			}
 
@@ -80,7 +88,12 @@ func main() {
 					msgParts := strings.SplitN(rawNoTags, " :", 2)
 					if len(msgParts) == 2 {
 						message := strings.TrimSpace(msgParts[1])
-						sendNotify(client, dbusConn, username, message)
+						// Check if user is a subscriber
+						isSubscriber := false
+						if badges, ok := tags["badges"]; ok {
+							isSubscriber = strings.Contains(badges, "subscriber/")
+						}
+						sendNotify(client, dbusConn, username, message, isSubscriber)
 					}
 				}
 			}
@@ -91,15 +104,50 @@ func main() {
 func sendNotify(
 	client *http.Client,
 	conn *dbus.Conn,
-	username, text string) {
+	username, text string,
+	isSubscriber bool,
+) {
 	if len(text) > 180 {
 		text = text[:177] + "..."
 	}
 
+	// Only process text-to-speech for subscribers
+	//if !isSubscriber {
+	//  _ = exec.Command("paplay", "/home/byda/sandbox/twitch-notifs/applepay.wav").Run()
+	//	return
+	//}
+
+	var body io.Reader = strings.NewReader(fmt.Sprintf("{\"text\": \"%s\",\"model_id\": \"eleven_multilingual_v2\"}", text))
+	req, _ := http.NewRequest("POST", textToSpeechApi, body)
+
+	apiKey := os.Getenv("ELEVENLABS_API_KEY")
+	req.Header.Add("xi-api-key", apiKey)
+	req.Header.Add("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("eleven labs api error: %v", err)
+		return
+	}
+
+	audio, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("read body error: %v", err)
+		return
+	}
+
+	fileName := fmt.Sprintf("/tmp/twitchmessages_audio/%s-%d.mp3", username, time.Now().Unix())
+	err = os.WriteFile(fileName, audio, 0644)
+
+	if err != nil {
+		log.Printf("save file error: %v", err)
+		return
+	}
+
+	_ = exec.Command("paplay", fileName).Run()
+
 	obj := conn.Object("org.freedesktop.Notifications", "/org/freedesktop/Notifications")
-
 	hints := map[string]dbus.Variant{}
-
 	var id uint32
 	call := obj.Call(
 		"org.freedesktop.Notifications.Notify", 0,
@@ -115,34 +163,5 @@ func sendNotify(
 	if call.Err != nil {
 		log.Printf("notify error: %v", call.Err)
 	}
-
 	_ = call.Store(&id)
-
-	var body io.Reader = strings.NewReader(fmt.Sprintf("{\"text\": \"%s\",\"model_id\": \"eleven_multilingual_v2\"}", text))
-	req, _ := http.NewRequest("POST", textToSpeechApi, body)
-	apiKey := os.Getenv("ELEVENLABS_API_KEY")
-	req.Header.Add("xi-api-key", apiKey)
-	req.Header.Add("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		log.Printf("eleven labs api error: %v", call.Err)
-		return
-	}
-
-	audio, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Printf("read body error: %v", call.Err)
-		return
-	}
-
-	fileName := fmt.Sprintf("/tmp/%s-%d.mp3", username, time.Now().Unix())
-	err = os.WriteFile(fileName, audio, 0644)
-
-	if err != nil {
-		log.Printf("save file error: %v", call.Err)
-		return
-	}
-
-	_ = exec.Command("paplay", fileName).Run()
 }
