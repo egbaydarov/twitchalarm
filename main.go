@@ -110,8 +110,8 @@ func sendNotify(
 	username, text string,
 	isSubscriber bool,
 ) {
-	if len(text) > 180 {
-		text = text[:177] + "..."
+	if len(text) > 400 {
+		text = string([]rune(text)[:177]) + "..."
 	}
 
 	//Only process text-to-speech for subscribers
