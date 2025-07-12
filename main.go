@@ -171,6 +171,12 @@ func readMessage(
 		return
 	}
 
+	err = os.MkdirAll("/tmp/twitchmessages_audio", 0755)
+	if err != nil {
+		log.Printf("error creating directory: %v", err)
+		return
+	}
+
 	fileName := fmt.Sprintf("/tmp/twitchmessages_audio/%s-%d.mp3", username, time.Now().Unix())
 	err = os.WriteFile(fileName, audio, 0644)
 
